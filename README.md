@@ -8,3 +8,5 @@
   - kern/mm/best\_fit\_pmm.c
 - lab3 - page fault, virtual memory, page replacement
   - kern/mm/vmm.c, swap_clock.c
+- lab4 - kernel thread management
+  - kern/process/proc.c
