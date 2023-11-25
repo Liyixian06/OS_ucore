@@ -1,4 +1,8 @@
+#include <assert.h>
+#include <clock.h>
+#include <console.h>
 #include <defs.h>
+#include <kdebug.h>
 #include <mmu.h>
 #include <memlayout.h>
 #include <clock.h>
@@ -20,16 +24,16 @@
 #define TICK_NUM 100
 
 static void print_ticks() {
-    cprintf("%d ticks\n",TICK_NUM);
+    cprintf("%d ticks\n", TICK_NUM);
 #ifdef DEBUG_GRADE
     cprintf("End of Test.\n");
     panic("EOT: kernel seems ok.");
 #endif
 }
 
-/* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S */
-void
-idt_init(void) {
+/* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S
+ */
+void idt_init(void) {
     extern void __alltraps(void);
     /* Set sscratch register to 0, indicating to exception vector that we are
      * presently executing in the kernel */
@@ -45,8 +49,7 @@ bool trap_in_kernel(struct trapframe *tf) {
     return (tf->status & SSTATUS_SPP) != 0;
 }
 
-void
-print_trapframe(struct trapframe *tf) {
+void print_trapframe(struct trapframe *tf) {
     cprintf("trapframe at %p\n", tf);
     print_regs(&tf->gpr);
     cprintf("  status   0x%08x\n", tf->status);
@@ -55,7 +58,7 @@ print_trapframe(struct trapframe *tf) {
     cprintf("  cause    0x%08x\n", tf->cause);
 }
 
-void print_regs(struct pushregs* gpr) {
+void print_regs(struct pushregs *gpr) {
     cprintf("  zero     0x%08x\n", gpr->zero);
     cprintf("  ra       0x%08x\n", gpr->ra);
     cprintf("  sp       0x%08x\n", gpr->sp);
@@ -96,8 +99,7 @@ static inline void print_pgfault(struct trapframe *tf) {
             tf->cause == CAUSE_STORE_PAGE_FAULT ? 'W' : 'R');
 }
 
-static int
-pgfault_handler(struct trapframe *tf) {
+static int pgfault_handler(struct trapframe *tf) {
     extern struct mm_struct *check_mm_struct;
     if(check_mm_struct !=NULL) { //used for test check_swap
             print_pgfault(tf);
@@ -147,7 +149,7 @@ void interrupt_handler(struct trapframe *tf) {
             // clear_csr(sip, SIP_STIP);
             clock_set_next_event();
             if (++ticks % TICK_NUM == 0 && current) {
-                // print_ticks();
+                //print_ticks();
                 current->need_resched = 1;
             }
             break;
@@ -185,7 +187,17 @@ void exception_handler(struct trapframe *tf) {
             cprintf("Instruction access fault\n");
             break;
         case CAUSE_ILLEGAL_INSTRUCTION:
-            cprintf("Illegal instruction\n");
+            //cprintf("Illegal instruction\n");
+             // 非法指令异常处理
+             /* LAB1 CHALLENGE3   YOUR CODE :  */
+            /*(1)输出指令异常类型（ Illegal instruction）
+             *(2)输出异常指令地址
+             *(3)更新 tf->epc寄存器
+            */
+		cprintf("Exception Type: Illegal instruction\n");
+		//width 016, unsigned long long hexadecimal
+		cprintf("Illegal instruction caught at 0x%016llx\n", tf->epc);
+		tf->epc += 2;
             break;
         case CAUSE_BREAKPOINT:
             cprintf("Breakpoint\n");
@@ -194,6 +206,11 @@ void exception_handler(struct trapframe *tf) {
                 syscall();
                 kernel_execve_ret(tf,current->kstack+KSTACKSIZE);
             }
+		else {
+			//cprintf("Exception Type: breakpoint\n");
+			cprintf("ebreak caught at 0x%016llx\n", tf->epc);
+			tf->epc += 2;
+		}
             break;
         case CAUSE_MISALIGNED_LOAD:
             cprintf("Load address misaligned\n");

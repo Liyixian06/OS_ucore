@@ -388,7 +388,10 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
              * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
              * (4) build the map of phy addr of  nage with the linear addr start
              */
-
+            void* src_kvaddr = page2kva(page); // parent 需要复制的物理页在内核地址空间中的va
+            void* dst_kvaddr = page2kva(npage); // child 需要被填充的物理页在内核地址空间中的va
+            memcpy(dst_kvaddr, src_kvaddr, PGSIZE); // parent 的物理页复制给 child
+            ret = page_insert(to, npage, start, perm); // 建立 child 的物理页和虚拟页的映射关系
 
             assert(ret == 0);
         }
@@ -436,6 +439,8 @@ int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm) {
 // invalidate a TLB entry, but only if the page tables being
 // edited are the ones currently in use by the processor.
 void tlb_invalidate(pde_t *pgdir, uintptr_t la) {
+    // flush_tlb();
+    // The flush_tlb flush the entire TLB, is there any better way?
     asm volatile("sfence.vma %0" : : "r"(la));
 }
 
@@ -599,8 +604,8 @@ static const char *perm2str(int perm) {
 //  table:       the beginning addr of table
 //  left_store:  the pointer of the high side of table's next range
 //  right_store: the pointer of the low side of table's next range
-// return value: 0 - not a invalid item range, perm - a valid item range with
-// perm permission
+//  return value: 0 - not a invalid item range, perm - a valid item range with
+//  perm permission
 static int get_pgtable_items(size_t left, size_t right, size_t start,
                              uintptr_t *table, size_t *left_store,
                              size_t *right_store) {
