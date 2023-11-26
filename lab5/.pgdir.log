@@ -23,7 +23,7 @@ PMP1: 0x0000000000000000-0xffffffffffffffff (A,R,W,X)
 
 Special kernel symbols:
   entry  0xc0200036 (virtual)
-  etext  0xc0206658 (virtual)
+  etext  0xc0206662 (virtual)
   edata  0xc02a0fe8 (virtual)
   end    0xc02ac578 (virtual)
 Kernel executable memory footprint: 690KB
