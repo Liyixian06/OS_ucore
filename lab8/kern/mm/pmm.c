@@ -490,6 +490,11 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
              * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
              * (4) build the map of phy addr of  nage with the linear addr start
              */
+            void* src_kvaddr = page2kva(page); // parent 需要复制的物理页在内核地址空间中的va
+            void* dst_kvaddr = page2kva(npage); // child 需要被填充的物理页在内核地址空间中的va
+            memcpy(dst_kvaddr, src_kvaddr, PGSIZE); // parent 的物理页复制给 child
+            ret = page_insert(to, npage, start, perm); // 建立 child 的物理页和虚拟页的映射关系
+
             assert(ret == 0);
         }
         start += PGSIZE;

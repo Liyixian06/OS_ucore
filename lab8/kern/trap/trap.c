@@ -185,7 +185,17 @@ void exception_handler(struct trapframe *tf) {
             cprintf("Instruction access fault\n");
             break;
         case CAUSE_ILLEGAL_INSTRUCTION:
-            cprintf("Illegal instruction\n");
+            //cprintf("Illegal instruction\n");
+             // 非法指令异常处理
+             /* LAB1 CHALLENGE3   YOUR CODE :  */
+            /*(1)输出指令异常类型（ Illegal instruction）
+             *(2)输出异常指令地址
+             *(3)更新 tf->epc寄存器
+            */
+		cprintf("Exception Type: Illegal instruction\n");
+		//width 016, unsigned long long hexadecimal
+		cprintf("Illegal instruction caught at 0x%016llx\n", tf->epc);
+		tf->epc += 2;
             break;
         case CAUSE_BREAKPOINT:
             cprintf("Breakpoint\n");
@@ -194,6 +204,11 @@ void exception_handler(struct trapframe *tf) {
                 syscall();
                 kernel_execve_ret(tf,current->kstack+KSTACKSIZE);
             }
+		else {
+			//cprintf("Exception Type: breakpoint\n");
+			cprintf("ebreak caught at 0x%016llx\n", tf->epc);
+			tf->epc += 2;
+		}
             break;
         case CAUSE_MISALIGNED_LOAD:
             cprintf("Load address misaligned\n");

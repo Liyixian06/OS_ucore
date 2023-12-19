@@ -10,3 +10,9 @@
   - kern/mm/vmm.c, swap_clock.c
 - lab4 - kernel thread management
   - kern/process/proc.c
+- lab5 - user process
+  - kern/process/proc.c, kern/mm/pmm.c
+- lab6 - process scheduling
+  - kern/schedule/default\_sched_stride.c
+- lab8 - file system
+  - kern/fs/sfs/sfs_inode.c, kern/process/proc.c

@@ -111,6 +111,21 @@ alloc_proc(void) {
      *       uint32_t wait_state;                        // waiting state
      *       struct proc_struct *cptr, *yptr, *optr;     // relations between processes
      */
+    proc->state = PROC_UNINIT;
+    proc->pid = -1;
+    proc->runs = 0;
+    proc->kstack = 0;
+    proc->need_resched = 0;
+    proc->parent = NULL;
+    proc->mm = NULL;
+    memset(&(proc->context), 0, sizeof(struct context));
+    proc->tf = NULL;
+    proc->cr3 = boot_cr3;
+    proc->flags = 0;
+    memset(proc->name, 0, PROC_NAME_LEN);
+    proc->wait_state = 0;
+    proc->cptr = proc->yptr = proc->optr = NULL;
+    
     //LAB6 YOUR CODE : (update LAB5 steps)
     /*
      * below fields(add in LAB6) in proc_struct need to be initialized
@@ -122,11 +137,19 @@ alloc_proc(void) {
      *     uint32_t lab6_priority;                     // FOR LAB6 ONLY: the priority of process, set by lab6_set_priority(uint32_t)
      */
 
+    proc->rq = NULL;
+    list_init(&(proc->run_link));
+    proc->time_slice = 0;
+    proc->lab6_run_pool.left = proc->lab6_run_pool.right = proc->lab6_run_pool.parent = NULL;
+    proc->lab6_stride = 0;
+    proc->lab6_priority = 0;
+
      //LAB8 YOUR CODE : (update LAB6 steps)
       /*
      * below fields(add in LAB6) in proc_struct need to be initialized
      *       struct files_struct * filesp;                file struct point        
      */
+    proc->filesp = NULL;
     }
     return proc;
 }
@@ -223,6 +246,16 @@ proc_run(struct proc_struct *proc) {
         *   lcr3():                   Modify the value of CR3 register
         *   switch_to():              Context switching between two processes
         */
+        struct proc_struct *prev = current, *next = proc;
+        bool intr_flag;
+        local_intr_save(intr_flag);
+        {
+            current = proc;
+            //load_esp0(next->kstack + KSTACKSIZE);
+            lcr3(next->cr3);
+            switch_to(&(prev->context), &(next->context));
+        }
+        local_intr_restore(intr_flag);
        //LAB8 YOUR CODE : (update LAB4 steps)
       /*
      * below fields(add in LAB6) in proc_struct need to be initialized
@@ -374,7 +407,7 @@ copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf) {
 
     // Set a0 to 0 so a child process knows it's just forked
     proc->tf->gpr.a0 = 0;
-    proc->tf->gpr.sp = (esp == 0) ? (uintptr_t)proc->tf : esp;
+    proc->tf->gpr.sp = (esp == 0) ? (uintptr_t)proc->tf - 4 : esp;
 
     proc->context.ra = (uintptr_t)forkret;
     proc->context.sp = (uintptr_t)(proc->tf);
@@ -455,12 +488,39 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
      */
 
     //    1. call alloc_proc to allocate a proc_struct
+    proc = alloc_proc();
+    if(proc==NULL){
+        goto fork_out;
+    }
+    proc->parent = current;
+    assert(current->wait_state == 0);
     //    2. call setup_kstack to allocate a kernel stack for child process
+    if (setup_kstack(proc) != 0) {
+        goto bad_fork_cleanup_kstack;
+    }
+    if (copy_files(clone_flags, proc) != 0) { //for LAB8
+        goto bad_fork_cleanup_fs;
+    }
     //    3. call copy_mm to dup OR share mm according clone_flag
+    if(copy_mm(clone_flags, proc)){
+        goto bad_fork_cleanup_proc;
+    }
     //    4. call copy_thread to setup tf & context in proc_struct
+    copy_thread(proc, stack, tf);
     //    5. insert proc_struct into hash_list && proc_list
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    {
+        proc->pid = get_pid();
+        hash_proc(proc);
+        set_links(proc);
+    }
+    local_intr_restore(intr_flag);
     //    6. call wakeup_proc to make the new child process RUNNABLE
+    wakeup_proc(proc);
     //    7. set ret vaule using child proc's pid
+    ret = proc->pid;
+    
 
   //LAB5 YOUR CODE : (update LAB4 steps)
    /* Some Functions
@@ -584,7 +644,166 @@ load_icode(int fd, int argc, char **kargv) {
      * (7) setup trapframe for user environment
      * (8) if up steps failed, you should cleanup the env.
      */
-    
+
+    assert(argc >=0 && argc <= EXEC_MAX_ARG_NUM);
+    //(1) create a new mm for current process
+    if(current->mm!=NULL){
+        panic("load_icode: current->mm must be empty.\n");
+    }
+    int ret = -E_NO_MEM;
+    struct mm_struct *mm;
+    if((mm = mm_create())==NULL){
+        goto bad_mm;
+    }
+
+    //(2) create a new PDT
+    if(setup_pgdir(mm)!=0){
+        goto bad_pgdir_cleanup_mm;
+    }
+    struct Page *page;
+
+    //(3) copy TEXT/DATA/BSS parts in binary to memory space of process
+    struct elfhdr __elf, *elf = &__elf;
+    if((ret = load_icode_read(fd, elf, sizeof(struct elfhdr), 0))!=0){
+        goto bad_elf_cleanup_pgdir;
+    }
+    if(elf->e_magic != ELF_MAGIC){
+        ret = -E_INVAL_ELF;
+        goto bad_elf_cleanup_pgdir;
+    }
+
+    struct proghdr __ph, *ph = &__ph;
+    uint32_t vm_flags, perm, phnum;
+    for(phnum = 0; phnum < elf->e_phnum; phnum++){
+        off_t phoff = elf->e_phoff + sizeof(struct proghdr)*phnum;
+        if((ret = load_icode_read(fd, ph, sizeof(struct proghdr), phoff))!=0){
+            goto bad_cleanup_mmap;
+        }
+        if(ph->p_type != ELF_PT_LOAD){
+            continue;
+        }
+        if(ph->p_filesz > ph->p_memsz){
+            ret = -E_INVAL_ELF;
+            goto bad_cleanup_mmap;
+        }
+        if(ph->p_filesz == 0){
+            continue;
+        }
+        vm_flags = 0, perm = PTE_U | PTE_V;
+        if (ph->p_flags & ELF_PF_X) vm_flags |= VM_EXEC;
+        if (ph->p_flags & ELF_PF_W) vm_flags |= VM_WRITE;
+        if (ph->p_flags & ELF_PF_R) vm_flags |= VM_READ;
+        if (vm_flags & VM_READ) perm |= PTE_R;
+        if (vm_flags & VM_WRITE) perm |= (PTE_W | PTE_R);
+        if (vm_flags & VM_EXEC) perm |= PTE_X;
+        if((ret = mm_map(mm, ph->p_va, ph->p_memsz, vm_flags, NULL))!=0){
+            goto bad_cleanup_mmap;
+        }
+        off_t offset = ph->p_offset;
+        size_t off, size;
+        uintptr_t start = ph->p_va, end, la = ROUNDDOWN(start, PGSIZE);
+
+        ret = -E_NO_MEM;
+
+        end = ph->p_va + ph->p_filesz;
+        while(start < end){
+            if((page = pgdir_alloc_page(mm->pgdir, la, perm))==NULL){
+                ret = -E_NO_MEM;
+                goto bad_cleanup_mmap;
+            }
+            off = start - la, size = PGSIZE - off, la += PGSIZE;
+            if(end < la){
+                size -= la - end;
+            }
+            if((ret = load_icode_read(fd, page2kva(page) + off, size, offset))!=0){
+                goto bad_cleanup_mmap;
+            }
+            start += size, offset += size;
+        }
+        end = ph->p_va + ph->p_memsz;
+
+        if(start < la){
+            if (start == end){
+                continue;
+            }
+            off = start + PGSIZE - la, size = PGSIZE - off;
+            if(end < la){
+                size -= la - end;
+            }
+            memset(page2kva(page) + off, 0, size);
+            start += size;
+            assert((end < la && start == end) || (end <= la && start == la));
+        }
+
+        while(start < end){
+            if((page = pgdir_alloc_page(mm->pgdir, la, perm))==NULL){
+                ret = -E_NO_MEM;
+                goto bad_cleanup_mmap;
+            }
+            off = start - la, size = PGSIZE - off, la += PGSIZE;
+            if(end < la){
+                size -= la - end;
+            }
+            memset(page2kva(page) + off, 0, size);
+            start += size;
+        }
+    }
+    sysfile_close(fd);
+
+    //(4) call mm_map to setup user stack, and put parameters into user stack
+    vm_flags = VM_READ | VM_WRITE | VM_STACK;
+    if((ret = mm_map(mm, USTACKTOP - USTACKSIZE, USTACKSIZE, vm_flags, NULL))!=0){
+        goto bad_cleanup_mmap;
+    }
+    assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-PGSIZE, PTE_USER) != NULL);
+    assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-2*PGSIZE, PTE_USER) != NULL);
+    assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-3*PGSIZE, PTE_USER) != NULL);
+    assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-4*PGSIZE, PTE_USER) != NULL);
+
+    //(5) setup current process's mm, cr3, reset pgidr (using lcr3 MARCO)
+    mm_count_inc(mm);
+    current->mm = mm;
+    current->cr3 = PADDR(mm->pgdir);
+    lcr3(PADDR(mm->pgdir));
+
+    //(6) setup uargc and uargv in user stacks
+    uint32_t argv_size = 0, i;
+    for(i = 0; i < argc; i++){
+        argv_size += strnlen(kargv[i], EXEC_MAX_ARG_LEN+1) +1;
+    }
+
+    uintptr_t stacktop = USTACKTOP - (argv_size/sizeof(long)+1)*sizeof(long);
+    char** uargv = (char**)(stacktop - argc * sizeof(char*));
+
+    argv_size = 0;
+    for(i = 0; i < argc; i++){
+        uargv[i] = strcpy((char*)(stacktop + argv_size), kargv[i]);
+        argv_size += strnlen(kargv[i], EXEC_MAX_ARG_LEN+1) +1;
+    }
+
+    stacktop = (uintptr_t)uargv - sizeof(int);
+    *(int*)stacktop = argc;
+
+    //(7) setup trapframe for user environment
+    struct trapframe *tf = current->tf;
+    uintptr_t sstatus = tf->status;
+    memset(tf, 0, sizeof(struct trapframe));
+    tf->gpr.sp = stacktop;
+    tf->epc = elf->e_entry;
+    tf->status = sstatus & ~(SSTATUS_SPP | SSTATUS_SPIE);
+    ret = 0;
+
+//(8) if up steps failed, cleanup the env.
+out:
+    return ret;
+bad_cleanup_mmap:
+    exit_mmap(mm);
+bad_elf_cleanup_pgdir:
+    put_pgdir(mm);
+bad_pgdir_cleanup_mm:
+    mm_destroy(mm);
+bad_mm:
+    goto out;
 }
 
 // this function isn't very correct in LAB8
@@ -780,12 +999,12 @@ kernel_execve(const char *name, const char **argv) {
     }
     asm volatile(
         "li a0, %1\n"
-        "ld a1, %2\n"
-        "ld a2, %3\n"
-        "ld a3, %4\n"
-   	    "li a7, 10\n"
+        "lw a1, %2\n"
+        "lw a2, %3\n"
+        "lw a3, %4\n"
+   	"li a7, 10\n"
         "ebreak\n"
-        "sd a0, %0\n"
+        "sw a0, %0\n"
         : "=m"(ret)
         : "i"(SYS_exec), "m"(name), "m"(argc), "m"(argv)
         : "memory");
