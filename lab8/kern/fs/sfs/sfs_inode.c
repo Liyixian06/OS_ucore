@@ -616,19 +616,18 @@ sfs_io_nolock(struct sfs_fs *sfs, struct sfs_inode *sin, void *buf, off_t offset
         blkno++;
         nblks--;
     }
-
-    if (nblks > 0) {
-        if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
+    
+    while (nblks != 0){
+    	if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
             goto out;
         }
         if ((ret = sfs_block_op(sfs, buf, ino, nblks)) != 0) {
             goto out;
         }
-
-        alen += nblks * SFS_BLKSIZE;
-        buf += nblks * SFS_BLKSIZE;
-        blkno += nblks;
-        nblks -= nblks;
+	alen += SFS_BLKSIZE;
+	buf += SFS_BLKSIZE;
+	blkno++;
+	nblks--;
     }
 
     // 读第三部分的数据
